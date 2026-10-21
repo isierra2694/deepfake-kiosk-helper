@@ -29,8 +29,10 @@ final class EdgeGuard {
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
     private var policy: EdgePolicy?
-    private var suppressedMultiClickButtons = Set<Int>()
+    private var clickPolicy = SingleClickPolicy(interval: NSEvent.doubleClickInterval)
     private(set) var intercepted = 0
+    private(set) var blockedRepeatClicks = 0
+    private(set) var blockedZoomGestures = 0
     private(set) var recoveryCount = 0
     private(set) var cursorFailed = false
     var isRunning: Bool { tap != nil }
@@ -40,7 +42,8 @@ final class EdgeGuard {
         stop()
         let types: [CGEventType] = [.mouseMoved, .leftMouseDown, .leftMouseUp,
             .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp,
-            .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel]
+            .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel,
+            ZoomGestureFilter.transportType]
         let mask = types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
         let callback: CGEventTapCallBack = { _, type, event, context in
             guard let context else { return Unmanaged.passUnretained(event) }
@@ -57,6 +60,8 @@ final class EdgeGuard {
         self.source = source
         policy = EdgePolicy(region: region)
         intercepted = 0
+        blockedRepeatClicks = 0
+        blockedZoomGestures = 0
         recoveryCount = 0
         cursorFailed = false
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
@@ -70,7 +75,7 @@ final class EdgeGuard {
         tap = nil
         source = nil
         policy = nil
-        suppressedMultiClickButtons.removeAll()
+        clickPolicy = SingleClickPolicy(interval: NSEvent.doubleClickInterval)
     }
 
     private func handle(_ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
@@ -79,34 +84,13 @@ final class EdgeGuard {
             return Unmanaged.passUnretained(event)
         }
         guard policy != nil else { return Unmanaged.passUnretained(event) }
-        let button: Int?
-        switch type {
-        case .leftMouseDown, .leftMouseUp, .leftMouseDragged: button = 0
-        case .rightMouseDown, .rightMouseUp, .rightMouseDragged: button = 1
-        case .otherMouseDown, .otherMouseUp, .otherMouseDragged:
-            button = Int(event.getIntegerValueField(.mouseEventButtonNumber))
-        default: button = nil
-        }
-        if let button {
-            switch type {
-            case .leftMouseDown, .rightMouseDown, .otherMouseDown:
-                if event.getIntegerValueField(.mouseEventClickState) > 1 {
-                    suppressedMultiClickButtons.insert(button)
-                    intercepted += 1
-                    return nil
-                }
-            case .leftMouseUp, .rightMouseUp, .otherMouseUp:
-                if suppressedMultiClickButtons.remove(button) != nil {
-                    intercepted += 1
-                    return nil
-                }
-            case .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
-                if suppressedMultiClickButtons.contains(button) {
-                    intercepted += 1
-                    return nil
-                }
-            default: break
+        if type == ZoomGestureFilter.transportType {
+            if let nativeEvent = NSEvent(cgEvent: event), ZoomGestureFilter.suppress(nativeEvent.type) {
+                intercepted += 1
+                blockedZoomGestures += 1
+                return nil
             }
+            return Unmanaged.passUnretained(event)
         }
         let input: PointerInput
         switch type {
@@ -122,6 +106,12 @@ final class EdgeGuard {
         case .scrollWheel: input = .scroll
         case .mouseMoved: input = .move
         default: return Unmanaged.passUnretained(event)
+        }
+        if clickPolicy.suppress(input, at: event.location, time: ProcessInfo.processInfo.systemUptime,
+                                clickCount: event.getIntegerValueField(.mouseEventClickState)) {
+            intercepted += 1
+            if case .down = input { blockedRepeatClicks += 1 }
+            return nil
         }
         // Copy back mutated gesture state without doing UI work in the callback.
         let decision = policy!.decide(input, at: event.location)
@@ -208,7 +198,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func buildWindow() {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 610),
             styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-        window.title = "Kiosk Edge Guard"
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
+        window.title = "Kiosk Edge Guard — \(version)"
         window.isReleasedWhenClosed = false
         window.delegate = self
         let root = NSStackView()
@@ -225,7 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let heading = NSTextField(labelWithString: "Keep the experience within reach.")
         heading.font = .systemFont(ofSize: 23, weight: .semibold)
         root.addArrangedSubview(heading)
-        root.addArrangedSubview(wrapped("Allow single clicks only across all displays and block taps and pointer movement in the top and bottom strips of the selected display. Chrome and the rest of the screen stay interactive."))
+        root.addArrangedSubview(wrapped("Block repeat clicks, smart zoom, and pinch zoom across all displays. Block taps and pointer movement in the top and bottom strips of the selected display. Single clicks, scrolling, and dragging remain available outside those strips."))
         let label = NSTextField(labelWithString: "Touch display")
         label.font = .systemFont(ofSize: 13, weight: .semibold)
         root.addArrangedSubview(label)
@@ -364,7 +355,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         }
         permissionLabel.stringValue = AXIsProcessTrusted() ? "Accessibility permission: granted" : "Accessibility permission: needed to block edge input"
-        countLabel.stringValue = "Intercepted events: \(guardEngine.intercepted)    Filter recoveries: \(guardEngine.recoveryCount)"
+        countLabel.stringValue = "Intercepted: \(guardEngine.intercepted)    Recoveries: \(guardEngine.recoveryCount)\nBlocked repeat clicks: \(guardEngine.blockedRepeatClicks)    Zoom gestures: \(guardEngine.blockedZoomGestures)"
+        countLabel.maximumNumberOfLines = 2
         statusItem.button?.title = guardEngine.isRunning ? "Guard: ON" : "Guard: Paused"
         statusItem.button?.toolTip = stateLabel.stringValue
     }

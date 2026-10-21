@@ -1,8 +1,10 @@
 # Kiosk Edge Guard
 
-A small native macOS utility for an event kiosk: keep a local Chrome experience usable on an external touch display while blocking its top and bottom strips and ignoring multi-click sequences. The MacBook can remain open and its display remains available to the operator.
+A small native macOS utility for an event kiosk: keep a local Chrome experience usable on an external touch display while blocking its top and bottom strips, repeat clicks, and zoom gestures. The MacBook can remain open and its display remains available to the operator.
 
-This is a **hardware-validation prototype**. While protection is enabled, it filters mouse, drag, and scroll events delivered through a Quartz session event tap across all displays. The first click in a sequence is allowed; subsequent clicks reported by macOS as part of a multi-click sequence are suppressed. A touch driver that delivers taps as mouse input should be covered. Drivers that inject events farther downstream, native gestures, and system behavior outside the event stream require testing on the actual kiosk. A successful build and the policy tests do not prove that a particular touch display cannot reveal the Dock or menu bar.
+This is a **hardware-validation prototype**. While protection is enabled, it filters mouse, drag, scroll, and magnification events delivered through a Quartz session event tap across all displays. The first click in a sequence is allowed; subsequent clicks are suppressed using both the native click count and timing/position checks. The timing check uses macOS's double-click interval and a 32 pt radius to tolerate touch jitter, even when a driver labels every tap as a single click. Rapid taps on the same control therefore activate it only once. Smart zoom (double-tap zoom) and pinch zoom are filtered separately from mouse clicks, throughout each display. Ordinary scrolling remains available outside the blocked strips.
+
+A touch driver that delivers taps or zoom gestures through this event stream should be covered. Drivers that inject events farther downstream, other native gestures, and system behavior outside the event stream require testing on the actual kiosk. A successful build and the policy tests do not prove that a particular touch display cannot reveal the Dock or menu bar or that every driver's browser zoom is intercepted.
 
 ## Run
 
@@ -27,7 +29,8 @@ Do this with the exact Mac, touch driver, display orientation, scaling, and Chro
 - Touch buttons, scroll, and drag within the web experience. Slide a touch from the page into a strip and release; Chrome must not remain dragging. Start a touch in a strip, slide into the page, and release; it must not activate page controls.
 - If the Dock or menu bar still appears, verify it cannot be operated. Increase the strip to cover the entire visible system control region and repeat. A bottom strip sized only for the reveal edge does not cover a Dock extending higher into the display.
 - Test the emergency shortcut with Chrome active. Confirm quitting the utility immediately restores ordinary input.
-- Confirm a rapid second click does not trigger double-click behavior on either display while protection is enabled. With protection paused, normal multi-click input is restored.
+- Confirm a rapid second click does not trigger double-click behavior on either display while protection is enabled. Watch **Blocked repeat clicks** increase for suppressed presses. With protection paused, normal multi-click input is restored.
+- Double-tap and pinch within Chrome, including the middle of the page. Zoom must not change, and **Zoom gestures** should increase when native magnification events are suppressed. If Chrome still zooms with no change in either counter, the driver may be delivering input outside this filter; record the driver and exact gesture for further diagnosis. These counters count input events, so one pinch can increment the zoom counter multiple times.
 - Test unplug/replug, rotation or scaling changes, sleep/wake, and restarting the utility. Check that it pauses visibly and that deliberate re-enabling protects the correct monitor.
 - Test any multi-touch gestures exposed by the driver. These are not universally represented as mouse events and are outside the prototype's guarantee.
 
@@ -35,7 +38,7 @@ Blocking a strip also blocks web content beneath it; keep important page control
 
 ## Build and test
 
-Requires macOS with Apple Command Line Tools (Swift compiler); no downloaded dependencies or Xcode project required. The deployment target is macOS 13. Build scripts create their module cache within `build/`.
+Requires macOS with Apple Command Line Tools (Swift compiler); no downloaded dependencies or Xcode project required. The deployment target is macOS 13. Build scripts create their module cache within `build/`, with a separate cache for each project location so renaming or moving the folder does not reuse stale absolute paths.
 
 ```sh
 zsh build.sh
@@ -52,8 +55,9 @@ The build applies a local ad-hoc signature. For a stable signing identity, set `
 
 ## Implementation
 
-- `Sources/EdgePolicy.swift`: point-based Quartz geometry and gesture-sequence policy. Handles negative display origins and preserves releases for clicks begun in the page.
-- `Sources/main.swift`: native AppKit settings, persistent display selection, previews, a session event filter for edge protection and single-click-only input, permission checks, and a Carbon emergency hotkey. Ordinary keystrokes are not monitored.
-- `Tests/main.swift`: executable policy checks covering edge taps, boundary coordinates, drag/release pairing, blocked gestures crossing displays, and unaffected MacBook events.
+- `Sources/EdgePolicy.swift`: point-based Quartz geometry, edge policy, and repeat-click detection. Handles negative display origins and preserves releases for clicks begun in the page.
+- `Sources/ZoomGestureFilter.swift`: identifies smart-zoom and pinch-zoom events decoded from Quartz's generic gesture transport.
+- `Sources/main.swift`: native AppKit settings, persistent display selection, previews, a session event filter for edge protection, single-click input, and zoom gestures, permission checks, and a Carbon emergency hotkey. Ordinary keystrokes are not monitored.
+- `Tests/main.swift`: executable policy checks covering edge taps, boundary coordinates, drag/release pairing, blocked gestures crossing displays, repeat taps with missing or incorrect click counts, and zoom gesture classification.
 
 Relevant Apple APIs: [event tap locations](https://developer.apple.com/documentation/coregraphics/cgeventtaplocation), [event filtering](https://developer.apple.com/documentation/coregraphics/cgeventtapcallback), [display bounds](https://developer.apple.com/documentation/coregraphics/cgdisplaybounds(_:)), and [cursor movement](https://developer.apple.com/documentation/coregraphics/cgwarpmousecursorposition(_:)).

@@ -3,16 +3,19 @@ set -euo pipefail
 PROJECT_DIR="${0:A:h}"
 cd "$PROJECT_DIR"
 APP_DIR="$PROJECT_DIR/build/Kiosk Edge Guard.app"
-mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources" "$PROJECT_DIR/build/module-cache"
+# Swift module caches contain absolute paths. Keep a separate cache after a move.
+PROJECT_CACHE_KEY=$(print -rn -- "$PROJECT_DIR" | cksum)
+MODULE_CACHE="$PROJECT_DIR/build/module-cache/${PROJECT_CACHE_KEY%% *}"
+mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources" "$MODULE_CACHE"
 # ARCHS="arm64 x86_64" ./build.sh makes a universal app for a different event Mac.
 ARCH_LIST=( ${=ARCHS:-$(uname -m)} )
 BINARIES=()
 for APP_ARCH in "${ARCH_LIST[@]}"; do
     APP_BINARY="$PROJECT_DIR/build/KioskEdgeGuard-$APP_ARCH"
     xcrun swiftc -swift-version 5 -O -target "$APP_ARCH-apple-macosx13.0" \
-        -module-cache-path "$PROJECT_DIR/build/module-cache" \
+        -module-cache-path "$MODULE_CACHE" \
         -framework AppKit -framework ApplicationServices -framework Carbon -framework ColorSync \
-        Sources/EdgePolicy.swift Sources/main.swift -o "$APP_BINARY"
+        Sources/EdgePolicy.swift Sources/ZoomGestureFilter.swift Sources/main.swift -o "$APP_BINARY"
     BINARIES+=("$APP_BINARY")
 done
 if (( ${#BINARIES[@]} > 1 )); then

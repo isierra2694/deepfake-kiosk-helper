@@ -27,6 +27,44 @@ enum PointerInput {
     case down(Int), up(Int), drag(Int)
 }
 
+/// Some touch drivers label every tap as a single click. Detect nearby repeat
+/// presses independently, and discard their entire press/drag/release sequence.
+struct SingleClickPolicy {
+    var interval: TimeInterval
+    var radius: CGFloat = 32
+    private var lastPress: [Int: (time: TimeInterval, point: CGPoint)] = [:]
+    private var suppressedButtons = Set<Int>()
+
+    init(interval: TimeInterval) { self.interval = interval }
+
+    mutating func suppress(_ input: PointerInput, at point: CGPoint,
+                           time: TimeInterval, clickCount: Int64) -> Bool {
+        switch input {
+        case .down(let button):
+            let previous = lastPress[button]
+            lastPress[button] = (time, point)
+            let nearbyRepeat = previous.map {
+                let elapsed = time - $0.time
+                let dx = point.x - $0.point.x
+                let dy = point.y - $0.point.y
+                return elapsed >= 0 && elapsed <= interval && dx * dx + dy * dy <= radius * radius
+            } ?? false
+            if clickCount > 1 || nearbyRepeat {
+                suppressedButtons.insert(button)
+                return true
+            }
+            suppressedButtons.remove(button)
+            return false
+        case .up(let button):
+            return suppressedButtons.remove(button) != nil
+        case .drag(let button):
+            return suppressedButtons.contains(button)
+        case .move, .scroll:
+            return false
+        }
+    }
+}
+
 enum EdgeDecision: Equatable {
     case pass
     case suppress(cursor: CGPoint?)
