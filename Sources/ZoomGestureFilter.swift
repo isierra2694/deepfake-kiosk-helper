@@ -6,6 +6,6 @@ enum ZoomGestureFilter {
     static let transportType = CGEventType(rawValue: UInt32(NSEvent.EventType.gesture.rawValue))!
 
     static func suppress(_ type: NSEvent.EventType) -> Bool {
-        type == .smartMagnify || type == .magnify
+        type == .smartMagnify
     }
 }

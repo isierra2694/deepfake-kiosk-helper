@@ -42,32 +42,22 @@ func expect(_ actual: Bool, _ expected: Bool, _ label: String) {
     guard actual == expected else { fatalError("\(label): got \(actual), expected \(expected)") }
 }
 
-// Regression: touch drivers can report every tap with clickCount == 1.
-// Repeat taps in the page, and on the other display, must still be suppressed.
-var clicks = SingleClickPolicy(interval: 0.5)
-expect(clicks.suppress(.down(0), at: middle, time: 1, clickCount: 1), false, "first click in page")
-expect(clicks.suppress(.up(0), at: middle, time: 1.05, clickCount: 1), false, "first release in page")
-expect(clicks.suppress(.down(0), at: CGPoint(x: middle.x + 12, y: middle.y), time: 1.2, clickCount: 1), true, "repeat tap with touch jitter and count 1")
-expect(clicks.suppress(.drag(0), at: laptop, time: 1.22, clickCount: 1), true, "suppressed drag crossing displays")
-expect(clicks.suppress(.up(0), at: laptop, time: 1.25, clickCount: 1), true, "suppressed release crossing displays")
-expect(clicks.suppress(.down(0), at: middle, time: 1.4, clickCount: 1), true, "rapid third tap cannot restart sequence")
-expect(clicks.suppress(.up(0), at: middle, time: 1.45, clickCount: 1), true, "third release suppressed")
-expect(clicks.suppress(.down(0), at: middle, time: 2, clickCount: 1), false, "single click after interval")
-expect(clicks.suppress(.drag(0), at: laptop, time: 2.1, clickCount: 1), false, "normal drag preserved")
-expect(clicks.suppress(.up(0), at: laptop, time: 2.2, clickCount: 1), false, "normal drag release preserved")
-expect(clicks.suppress(.down(0), at: laptop, time: 2.3, clickCount: 1), false, "rapid click on distant target allowed")
-expect(clicks.suppress(.up(0), at: laptop, time: 2.35, clickCount: 1), false, "distant release allowed")
-expect(clicks.suppress(.down(0), at: laptop, time: 2.4, clickCount: 0), true, "repeat on other display with missing count")
-expect(clicks.suppress(.down(1), at: laptop, time: 2.41, clickCount: 1), false, "different button independent")
-expect(clicks.suppress(.up(1), at: laptop, time: 2.42, clickCount: 1), false, "other button release paired")
-expect(clicks.suppress(.up(0), at: laptop, time: 2.45, clickCount: 0), true, "repeat release with missing count")
-expect(clicks.suppress(.down(2), at: laptop, time: 3, clickCount: 2), true, "native double click count respected")
-expect(clicks.suppress(.up(2), at: laptop, time: 3.1, clickCount: 1), true, "release paired despite inconsistent count")
-expect(clicks.suppress(.scroll, at: laptop, time: 3.2, clickCount: 0), false, "scroll preserved")
+// Repeated presses must all pass in the page and on the operator's display.
+var repeatPolicy = EdgePolicy(region: region)
+for point in [middle, laptop] {
+    for button in [0, 1, 2] {
+        for click in 1...3 {
+            expect(repeatPolicy.decide(.down(button), at: point), .pass, "press \(click), button \(button)")
+            expect(repeatPolicy.decide(.up(button), at: point), .pass, "release \(click), button \(button)")
+        }
+    }
+}
 
 // Smart zoom is a gesture, independent of mouse click counts.
 expect(ZoomGestureFilter.suppress(.smartMagnify), true, "smart zoom suppressed")
-expect(ZoomGestureFilter.suppress(.magnify), true, "pinch zoom suppressed")
+expect(ZoomGestureFilter.suppress(.magnify), false, "pinch zoom allowed")
+expect(ZoomGestureFilter.suppress(.leftMouseDown), false, "mouse presses allowed")
+expect(ZoomGestureFilter.suppress(.leftMouseUp), false, "mouse releases allowed")
 expect(ZoomGestureFilter.suppress(.scrollWheel), false, "ordinary scrolling preserved")
 expect(ZoomGestureFilter.suppress(.swipe), false, "unrelated swipe preserved")
 expect(ZoomGestureFilter.suppress(.gesture), false, "generic gestures not blanket blocked")
