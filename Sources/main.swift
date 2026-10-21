@@ -29,6 +29,7 @@ final class EdgeGuard {
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
     private var policy: EdgePolicy?
+    private var suppressedMultiClickButtons = Set<Int>()
     private(set) var intercepted = 0
     private(set) var recoveryCount = 0
     private(set) var cursorFailed = false
@@ -69,6 +70,7 @@ final class EdgeGuard {
         tap = nil
         source = nil
         policy = nil
+        suppressedMultiClickButtons.removeAll()
     }
 
     private func handle(_ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
@@ -77,6 +79,35 @@ final class EdgeGuard {
             return Unmanaged.passUnretained(event)
         }
         guard policy != nil else { return Unmanaged.passUnretained(event) }
+        let button: Int?
+        switch type {
+        case .leftMouseDown, .leftMouseUp, .leftMouseDragged: button = 0
+        case .rightMouseDown, .rightMouseUp, .rightMouseDragged: button = 1
+        case .otherMouseDown, .otherMouseUp, .otherMouseDragged:
+            button = Int(event.getIntegerValueField(.mouseEventButtonNumber))
+        default: button = nil
+        }
+        if let button {
+            switch type {
+            case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+                if event.getIntegerValueField(.mouseEventClickState) > 1 {
+                    suppressedMultiClickButtons.insert(button)
+                    intercepted += 1
+                    return nil
+                }
+            case .leftMouseUp, .rightMouseUp, .otherMouseUp:
+                if suppressedMultiClickButtons.remove(button) != nil {
+                    intercepted += 1
+                    return nil
+                }
+            case .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
+                if suppressedMultiClickButtons.contains(button) {
+                    intercepted += 1
+                    return nil
+                }
+            default: break
+            }
+        }
         let input: PointerInput
         switch type {
         case .leftMouseDown: input = .down(0)
@@ -194,7 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let heading = NSTextField(labelWithString: "Keep the experience within reach.")
         heading.font = .systemFont(ofSize: 23, weight: .semibold)
         root.addArrangedSubview(heading)
-        root.addArrangedSubview(wrapped("Block taps and pointer movement in the top and bottom strips of one display. Chrome and the rest of the screen stay interactive."))
+        root.addArrangedSubview(wrapped("Allow single clicks only across all displays and block taps and pointer movement in the top and bottom strips of the selected display. Chrome and the rest of the screen stay interactive."))
         let label = NSTextField(labelWithString: "Touch display")
         label.font = .systemFont(ofSize: 13, weight: .semibold)
         root.addArrangedSubview(label)
